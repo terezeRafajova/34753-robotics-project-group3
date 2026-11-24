@@ -12,7 +12,7 @@ ADDR_GOAL_POSITION = 30
 ADDR_MOVING_SPEED = 32
 ADDR_PRESENT_POSITION = 36
 DEG_PER_TICK = 0.29
-
+PORT = "COM3"
 
 class Arm:
     MOTOR_IDS = [1, 2, 3, 4]
@@ -21,10 +21,13 @@ class Arm:
     LIMITS = [(-90, 90), (-120, 120), (-140, 140), (-140, 140)]
 
     def __init__(self, speed=0.1, baudrate=1_000_000):
-        ports = glob.glob('/dev/tty.usbmodem*')
+        
+        """ports = glob.glob('/dev/tty.usbmodem*')
         if not ports:
             raise SystemExit("No robot found. Is the USB2AX plugged in?")
-        self.port = PortHandler(ports[0])
+        self.port = PortHandler(ports[0])"""
+        self.speed= speed
+        self.port = PortHandler(PORT)
         self.packet = PacketHandler(1.0)
         if not self.port.openPort() or not self.port.setBaudRate(baudrate):
             raise SystemExit("Could not open the port.")
@@ -66,15 +69,24 @@ class Arm:
         return q
 
     def move_j(self, q, wait=True, tol=2.0, timeout=10.0):
-        """Move to joint angles q = [q1, q2, q3, q4] in degrees."""
+        """Move to joint angles q = [q1, q2, q3, q4] in degrees.
+
+        Each servo gets a speed proportional to how far it has to turn, so all
+        joints start and stop together (smooth instead of jerky).
+        """
         for k, (lo, hi) in enumerate(self.LIMITS):
             if not lo <= q[k] <= hi:
                 raise ValueError(f"q{k+1} = {q[k]:.1f} deg is outside {lo}..{hi}")
+        now = self.read()
+        dq = [abs(a - b) for a, b in zip(q, now)]
+        biggest = max(max(dq), 1e-6)
         for k, dxl_id in enumerate(self.MOTOR_IDS):
+            speed = max(1, round(self.speed * 1023 * dq[k] / biggest))   # never 0: 0 means FULL speed
+            self._write2(dxl_id, ADDR_MOVING_SPEED, speed)
             servo_deg = self.SIGN[k] * q[k] + self.OFFSET_DEG[k]
             self._write2(dxl_id, ADDR_GOAL_POSITION, round(servo_deg / DEG_PER_TICK))
         if not wait:
-            return
+            return now
         start = time.time()
         while time.time() - start < timeout:
             now = self.read()

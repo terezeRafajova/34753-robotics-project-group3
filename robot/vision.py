@@ -16,13 +16,16 @@ import cv2
 import numpy as np
 import pytesseract
 
+if sys.platform == "win32":     # on Windows, tell pytesseract where Tesseract is installed
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 KEY_PITCH_MM = 19.0     # centre-to-centre distance of neighbouring keys
 
 # Key positions in "key units" (1 unit = 19 mm). Row 0 = Q row, row 1 = A row, row 2 = bottom row.
 ROW_OFFSET = [0.0, 0.26, 0.75]
-LAYOUTS = {
-    "QWERTZ": ["QWERTZUIOP", "ASDFGHJKL", "YXCVBNM"],
+LAYOUTS = {                  # on a tie the first one wins: QWERTY (Danish/English keyboards)
     "QWERTY": ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"],
+    "QWERTZ": ["QWERTZUIOP", "ASDFGHJKL", "YXCVBNM"],
 }
 SPACE_UNITS = (4.75, 3.0)   # centre of the space bar, under B
 
@@ -43,7 +46,7 @@ def find_letter_blobs(gray, threshold=150):
     blobs = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
-        if 18 <= h <= 32 and 4 <= w <= 32 and area >= 60:
+        if 14 <= h <= 45 and 4 <= w <= 45 and area >= 50:
             glyph = 255 - (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255  # black letter on white
             blobs.append({"cx": x + w / 2, "cy": y + h / 2, "w": w, "h": h, "glyph": glyph})
     return blobs
@@ -91,6 +94,10 @@ def fit_layout(blobs):
 def recognize_keys(image):
     """Return (keys, info): keys maps each letter and ' ' to its pixel (x, y)."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Small camera images (e.g. 640x480) have letters too small to read well: enlarge them first.
+    up = 2 if gray.shape[1] < 1000 else 1
+    if up > 1:
+        gray = cv2.resize(gray, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
     blobs = find_letter_blobs(gray)
     read_letters(blobs)
     fit = fit_layout(blobs)
@@ -99,12 +106,17 @@ def recognize_keys(image):
     names = list(fit["units"])
     pts = cv2.perspectiveTransform(np.float32([fit["units"][c] for c in names]).reshape(-1, 1, 2), fit["H"])
     h, w = gray.shape
-    keys = {c: tuple(p[0]) for c, p in zip(names, pts) if 0 <= p[0][0] < w and 0 <= p[0][1] < h}
     # Pixel size of one key (19 mm), measured in the middle of the keyboard
     a, b = cv2.perspectiveTransform(np.float32([[[4, 1]], [[5, 1]]]), fit["H"])
     px_per_key = float(np.linalg.norm(a[0] - b[0]))
+    m = px_per_key      # also keep keys up to one key outside the image (e.g. the space bar)
+    keys = {c: tuple(p[0]) for c, p in zip(names, pts) if -m <= p[0][0] < w + m and -m <= p[0][1] < h + m}
+    # Back to the pixel coordinates of the original image
+    keys = {c: (x / up, y / up) for c, (x, y) in keys.items()}
+    for bl in blobs:
+        bl["cx"], bl["cy"] = bl["cx"] / up, bl["cy"] / up
     info = {"layout": fit["layout"], "letters_read": fit["read"], "inliers": fit["inliers"],
-            "mm_per_px": KEY_PITCH_MM / px_per_key, "blobs": blobs}
+            "mm_per_px": KEY_PITCH_MM / (px_per_key / up), "blobs": blobs}
     return keys, info
 
 

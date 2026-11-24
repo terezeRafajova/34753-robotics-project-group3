@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 venv/
 .env
+type_hello_view.png
+tests/*_keys.png
+cam*.png
