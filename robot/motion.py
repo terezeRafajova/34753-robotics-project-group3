@@ -85,7 +85,7 @@ class Motion:
             if kind == "press" and point[2] < self.surface + 2 and np.linalg.norm(point[:2] - target_tip[:2]) > 5.5:
                 raise ValueError("Tip moved sideways during the press.")
             if event is not None and event():
-                # Cancel the descending goal as soon as Windows receives a character.
+                # Cancel the descending goal as soon as the terminal receives the character.
                 self.arm.command(q, [40] * 4)
                 return True
             error = np.max(np.abs(q - goal))

@@ -1,6 +1,6 @@
 """DTU 34753, problem 11a: recognise the keyboard and type "hello world".
 
-Run from the Project folder, in a terminal (Mac or Windows):
+Run from the Project folder, in a terminal:
     python type_hello.py plan     # photo + plan, moves the arm but presses nothing
     python type_hello.py run      # photo + plan + type
     python type_hello.py home     # just go home
@@ -27,24 +27,14 @@ SETUP = Path(__file__).parent / "robot" / "setup.json"
 
 
 def default_port():
-    """USB2AX on a Mac shows up as /dev/tty.usbmodem*; on Windows the old default COM6."""
+    """The USB2AX shows up as /dev/tty.usbmodem* on a Mac."""
     ports = sorted(glob.glob("/dev/tty.usbmodem*"))
-    return ports[0] if ports else "COM6"
+    return ports[0] if ports else None
 
 
 def make_input_reader():
     """Non-blocking read of the characters typed into this terminal (the physical keystrokes)."""
-    if sys.platform == "win32":
-        import msvcrt
-
-        def read_input():
-            chars = []
-            while msvcrt.kbhit():
-                chars.append(msvcrt.getwch())
-            return "".join(chars)
-        return read_input
-
-    # Mac / Linux: switch the terminal to character mode (no Enter, no echo) and restore it on exit.
+    # Switch the terminal to character mode (no Enter, no echo) and restore it on exit.
     import atexit
     import select
     import termios
@@ -67,8 +57,7 @@ def read_setup():
 
 
 def photograph(camera, arm):
-    backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-    cap = cv2.VideoCapture(camera, backend)
+    cap = cv2.VideoCapture(camera)
     try:
         if not cap.isOpened():
             raise ValueError(f"Cannot open camera {camera}.")
@@ -83,7 +72,7 @@ def photograph(camera, arm):
             if ok and frame is not None and np.std(frame) > 8 and max(abs(after-before)) <= 1:
                 cv2.imwrite("last-camera.png", frame)
                 return frame, (before+after)/2
-        raise ValueError("Camera gave dark, empty or moving frames. Check camera 1 and the USB connection.")
+        raise ValueError(f"Camera gave dark, empty or moving frames. Check camera {camera} and the USB connection.")
     finally:
         cap.release()
 
@@ -112,24 +101,6 @@ def plan(frame, joints, setup):
         current = hover
     check_segment(current, home, "travel", setup)
     return poses
-
-
-def type_text_blind(motion, poses):
-    """--no-feedback: press each key to the calibrated depth without checking the typed letter.
-    Used when the keyboard is connected to another computer."""
-    from robot.kinematics import fk
-    for i, ch in enumerate(TEXT):
-        hover, bottom = poses[ch]
-        motion.move(hover)
-        target_z = fk(bottom)[0][2, 3]
-        # Stop as soon as the tip is within 1.5 mm of the bottom target: the key has
-        # bottomed out by then, so the arm should not keep pushing.
-        deep_enough = lambda: fk(motion.arm.angles())[0][2, 3] <= target_z + 1.5
-        try:
-            motion.move(bottom, "press", deep_enough)
-        finally:
-            motion.move(hover, "lift")
-        print(f"Pressed: {TEXT[:i + 1]!r}", flush=True)
 
 
 def type_text(motion, poses, read_input):
@@ -164,28 +135,14 @@ def type_text(motion, poses, read_input):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["plan", "run", "home"])
-    parser.add_argument("--port", default=default_port(), help="default: first /dev/tty.usbmodem*, else COM6")
-    parser.add_argument("--camera", type=int, default=1 if sys.platform == "win32" else 0)
+    parser.add_argument("--port", default=default_port(), help="default: first /dev/tty.usbmodem*")
+    parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--speed", type=float, default=60, help="transfer speed in joint degrees/s")
-    parser.add_argument("--no-feedback", action="store_true",
-                        help="run without checking the typed letters (keyboard on another computer)")
-    parser.add_argument("--image", type=Path, help="offline plan at the selected calibrated camera pose")
-    parser.add_argument("--joints", type=float, nargs=4, help="encoders at exposure, for --image")
     args = parser.parse_args()
     setup = read_setup()
     if not math.isfinite(args.speed) or not 0 < args.speed <= 1023 * 0.666:
         parser.error("--speed must be in the AX joint-mode speed command range (0 to 681 degrees/s, excluding zero).")
-    if args.image:
-        if args.mode != "plan":
-            parser.error("--image is only available in plan mode.")
-        frame = cv2.imread(str(args.image))
-        if frame is None:
-            parser.error("Could not open the supplied image.")
-        plan(frame, args.joints or setup["home"], setup)
-        return
-    if args.joints:
-        parser.error("--joints is only for an offline image.")
-    if args.mode == "run" and not args.no_feedback:
+    if args.mode == "run":
         if not sys.stdin.isatty():
             raise RuntimeError("Start in a terminal: the typed characters are the feedback for each press.")
         read_input = make_input_reader()
@@ -216,10 +173,7 @@ def main():
         motion.home()
         if args.mode == "run":
             start = time.monotonic()
-            if args.no_feedback:
-                type_text_blind(motion, poses)
-            else:
-                type_text(motion, poses, read_input)
+            type_text(motion, poses, read_input)
             motion.home()
             print(f"Typed {TEXT!r} and returned home in {time.monotonic()-start:.1f} s.")
     except BaseException:

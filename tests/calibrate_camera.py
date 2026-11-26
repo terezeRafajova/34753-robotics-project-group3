@@ -81,28 +81,11 @@ Nudge the tip until it is straight above the CENTRE of the key (look from above)
 
 
 def fit_correction(src, dst):
-    """2x3 correction that maps src points onto dst points (least squares).
-    3+ keys: affine (rotation, shift, and stretch: fixes wrong key spacing or height too).
-    2 keys: rotation + shift.  1 key: shift only."""
+    """Affine 2x3 correction (rotation, shift, stretch) that maps src points onto dst
+    points in the least-squares sense. Needs at least 3 keys."""
     src, dst = np.asarray(src, float), np.asarray(dst, float)
-    if len(src) >= 3:
-        m, *_ = np.linalg.lstsq(np.column_stack([src, np.ones(len(src))]), dst, rcond=None)
-        return m.T
-    return fit_rigid(src, dst)
-
-
-def fit_rigid(src, dst):
-    """Rotation + shift (2x3) that maps src points onto dst points (least squares)."""
-    src, dst = np.asarray(src, float), np.asarray(dst, float)
-    if len(src) == 1:
-        return np.hstack([np.eye(2), (dst[0] - src[0])[:, None]])
-    cs, cd = src.mean(0), dst.mean(0)
-    u, _, vt = np.linalg.svd((src - cs).T @ (dst - cd))
-    r = vt.T @ u.T
-    if np.linalg.det(r) < 0:
-        vt[-1] *= -1
-        r = vt.T @ u.T
-    return np.hstack([r, (cd - r @ cs)[:, None]])
+    m, *_ = np.linalg.lstsq(np.column_stack([src, np.ones(len(src))]), dst, rcond=None)
+    return m.T
 
 
 def aim(args, setup, setup_file):
@@ -187,8 +170,8 @@ def aim(args, setup, setup_file):
                     print("  can't go there:", e)
             motion.move(ik(p[0], p[1], z + 15, pitch_deg=-180), "lift")
 
-        if not src:
-            print("No keys centred; nothing changed.")
+        if len(src) < 3:
+            print("Centre at least 3 keys for a correction; nothing changed.")
             return
         m = fit_correction(src, dst)
         angle = np.degrees(np.arctan2(m[1, 0], m[0, 0]))
@@ -197,9 +180,7 @@ def aim(args, setup, setup_file):
         print("After the correction, each key is off by [mm]: "
               + "  ".join(f"{k} {e:.1f}" for k, e in zip(names, left)))
         print(f"\nCorrection: rotation {angle:+.1f} deg, shift ({m[0, 2]:+.1f}, {m[1, 2]:+.1f}) mm, "
-              f"stretch {stretch[0]:.3f} / {stretch[1]:.3f}"
-              + ("  (only 1 key: shift only)" if len(src) == 1 else "")
-              + ("  (2 keys: no stretch)" if len(src) == 2 else ""))
+              f"stretch {stretch[0]:.3f} / {stretch[1]:.3f}")
         old = np.vstack([np.asarray(setup.get("xy_correction", np.hstack([np.eye(2), np.zeros((2, 1))]))),
                          [0, 0, 1]])
         total = (np.vstack([m, [0, 0, 1]]) @ old)[:2]   # on top of any earlier correction
@@ -221,11 +202,9 @@ def main():
     parser.add_argument("--pitch", type=float, default=19.05, help="key spacing in mm (standard: 19.05)")
     parser.add_argument("--height", type=float, help="measured z of the key tops in mm (negative)")
     parser.add_argument("--travel", type=float, default=3.5, help="key travel in mm (membrane: about 3.5)")
-    parser.add_argument("--camera", type=int, default=1 if sys.platform == "win32" else 0)
+    parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--port", default=None, help="default: first /dev/tty.usbmodem*")
     parser.add_argument("--aim", action="store_true", help="correct the key positions for this robot")
-    parser.add_argument("--image", type=Path, help="offline test with a saved photo (no robot)")
-    parser.add_argument("--joints", type=float, nargs=4, help="encoder angles for --image")
     args = parser.parse_args()
 
     require_tesseract()
@@ -236,19 +215,14 @@ def main():
     new = dict(setup, column_pitch=args.pitch, row_pitch=args.pitch, travel=args.travel)
 
     # 1. One photo from the photo pose
-    if args.image:
-        frame = cv2.imread(str(args.image))
-        joints = np.array(args.joints or setup["views"][0]["joints"])
-    else:
-        from robot.arm import Arm
-        from type_hello import photograph
-        arm = Arm(args.port)
-        try:
-            arm.move_j(np.asarray(setup["home"]))
-            frame, joints = photograph(args.camera, arm)
-        finally:
-            arm.close()
-        cv2.imwrite("calibration-photo.png", frame)
+    from robot.arm import Arm
+    from type_hello import photograph
+    arm = Arm(args.port)
+    try:
+        arm.move_j(np.asarray(setup["home"]))
+        frame, joints = photograph(args.camera, arm)      # also saved as last-camera.png
+    finally:
+        arm.close()
     seen = recognize_keys(frame)
     print(f"{len(seen)} letters read: {' '.join(sorted(seen))}")
 
@@ -269,8 +243,6 @@ def main():
     new.update(surface_z=z, surface_samples={"H": z})
 
     # 3. Overwrite setup.json?
-    if args.image:
-        return
     print(f"\nNew values: key tops z = {z:.1f} mm, key spacing {new['column_pitch']:.2f} mm, "
           f"travel {new['travel']:.1f} mm")
     if input("Overwrite robot/setup.json with these values? [y/N] ").strip().lower() != "y":

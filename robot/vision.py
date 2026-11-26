@@ -4,9 +4,7 @@ I/L and Y/Z are unnecessary for locating the shared QWERTY/QWERTZ letter grid.
 The final metric fit uses measured glyph centres in the original camera frame.
 """
 import os
-from pathlib import Path
 import shutil
-import sys
 
 import cv2
 import numpy as np
@@ -23,26 +21,12 @@ def layout_units():
 
 
 def require_tesseract():
-    """Resolve the OCR executable from an override, PATH or an install directory."""
-    command = os.environ.get("TESSERACT_CMD") or pytesseract.pytesseract.tesseract_cmd
-    executable = shutil.which(command)
-    if executable is None and sys.platform == "win32" and command == "tesseract":
-        folders = [Path(os.environ[name]) for name in ("ProgramFiles", "ProgramFiles(x86)")
-                   if os.environ.get(name)]
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            folders.append(Path(local_app_data) / "Programs")
-        for folder in folders:
-            candidate = folder / "Tesseract-OCR" / "tesseract.exe"
-            if candidate.is_file():
-                executable = str(candidate)
-                break
-    if executable is None:
-        raise FileNotFoundError(
-            f"Tesseract OCR executable not found ({command}). "
-            "Install Tesseract OCR or set TESSERACT_CMD to the full path to its executable."
-        )
-    pytesseract.pytesseract.tesseract_cmd = executable
+    """Find the Tesseract program (brew install tesseract). TESSERACT_CMD overrides the path,
+    e.g. when Python is started from an app whose PATH lacks /opt/homebrew/bin."""
+    command = os.environ.get("TESSERACT_CMD") or shutil.which("tesseract") or "/opt/homebrew/bin/tesseract"
+    if not shutil.which(command):
+        raise FileNotFoundError("Tesseract OCR not found. Install it with: brew install tesseract")
+    pytesseract.pytesseract.tesseract_cmd = command
 
 
 def find_letter_blobs(gray, threshold=150, scale=1.0):

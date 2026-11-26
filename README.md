@@ -8,28 +8,22 @@ Problem 11a asks the real arm to recognise the keys of a keyboard placed in fron
 Project/
 ├── type_hello.py        main program: photo, plan, press the keys
 ├── robot/               robot code (imported, not run)
-├── tests/               setup and test scripts, calibration tool, example photos
+├── tests/               camera_test.py (live view), calibrate_camera.py (keyboard + camera)
 ├── requirements.txt
 └── README.md
 ```
 
 ## Setup (once)
 
-Mac:
-
 ```
 brew install tesseract
 python -m pip install -r requirements.txt
 ```
 
-Windows: `py -3.11 -m pip install -r requirements.txt`, and install Tesseract OCR with English data.
-A standard Windows installation is found automatically; for a custom one set `TESSERACT_CMD`.
-
 ## Run
 
-Run everything from the `Project` folder. On a Mac the port (`/dev/tty.usbmodem*`) is found
-automatically and camera 0 is used; on Windows the defaults are `COM6` and camera 1.
-Override with `--port` and `--camera`.
+Run everything from the `Project` folder. The port (`/dev/tty.usbmodem*`) is found
+automatically and camera 0 is used; override with `--port` and `--camera`.
 
 1. Power the arm, connect the camera and keyboard, and clear the area the links will sweep. Keep the same rigid camera mount and the keyboard on the calibrated desk. The board can translate and rotate between runs. Keep it still during a run.
 2. Plan once. The robot moves to the saved camera pose, takes a fresh photo, prints key coordinates in base millimetres and checks the whole route. It saves the latest exposure as `last-camera.png`. This mode moves the arm but does not press keys.
@@ -67,15 +61,6 @@ To return without photographing or typing, run `python type_hello.py home`. At s
 
 **Course material.** The assignment, Part 5, specifies the result and the use of a wrist-mounted camera. Lecture 6 covers paths, joint-space waypoints and piecewise trajectories. The fifth-order polynomial exercise in Part 2 applies to a prescribed circle. For the keyboard, the waypoint speeds are coordinated by the servo driver. Week 8 vision exercises distinguish image coordinates and world measurements.
 
-## Reproducible check without a robot
-
-```
-python type_hello.py plan --image tests/examples/keyboard_before.png
-python type_hello.py plan --image tests/examples/keyboard_after.png
-```
-
-These two real frames were taken either side of a ruler-measured 20 mm keyboard move. With the same nominal camera pose, H moved 20.3 mm in the calculation. The eight required key positions moved 20.0–20.5 mm. The row pitch was estimated from this pair, so this is a regression check for live localisation. Absolute tip accuracy and actual typing time require a run on the arm. Use `--joints q1 q2 q3 q4` with other saved images if the exposure angles are known.
-
 ## New keyboard
 
 ```
@@ -86,4 +71,14 @@ python tests/calibrate_camera.py --height -45    # with the measured height of t
 The arm takes one photo, works out the keyboard height (or, with `--height`, checks that the
 camera sees a normal key spacing), shows the new values and asks whether to overwrite
 `robot/setup.json`. Only the keyboard values change; the camera calibration is reused.
+
+If the robot then presses next to the keys, correct the positions for this camera:
+
+```
+python tests/calibrate_camera.py --aim
+```
+
+The arm hovers over each letter of "hello world"; nudge the tip with `w/a/s/d` until it is
+above the centre of the key, press Enter. It fits a rotation, shift and stretch and saves it
+in `robot/setup.json` (`xy_correction`). Running it again refines it.
 Moving or rotating the keyboard on the same table needs no new calibration, only a fresh photo.

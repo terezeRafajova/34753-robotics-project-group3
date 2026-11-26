@@ -8,12 +8,6 @@ import numpy as np
 LIMITS = np.array([[-90, 90], [-120, 120], [-140, 140], [-140, 140]])
 IDS = (1, 2, 3, 4)
 
-# AX-12 compliance slope (registers 28/29): how softly a motor approaches its goal.
-# Factory value 32 lets a loaded joint stop ~2 degrees short (the shoulder sags when the
-# arm reaches low). Smaller = stiffer. Allowed: 2, 4, 8, 16, 32, 64, 128. If a joint
-# starts to buzz or oscillate, go back up one step.
-COMPLIANCE_SLOPE = {1: 32, 2: 32, 3: 32, 4: 32}   # factory values (16 made base + shoulder oscillate)
-
 
 def check_angles(q):
     if np.shape(q) != (4,) or not np.all((q >= LIMITS[:, 0]) & (q <= LIMITS[:, 1])):
@@ -24,7 +18,7 @@ def find_port():
     """First USB2AX on a Mac (/dev/tty.usbmodem*)."""
     ports = sorted(glob.glob("/dev/tty.usbmodem*"))
     if not ports:
-        raise OSError("No robot found. Is the USB2AX plugged in? (or pass the port, e.g. Arm('COM6'))")
+        raise OSError("No robot found. Is the USB2AX plugged in?")
     return ports[0]
 
 
@@ -48,10 +42,6 @@ class Arm:
                 if self.read_register(motor, 30) != tick:
                     raise OSError(f"ID {motor} did not accept its initial hold position.")
             for motor in IDS:
-                for register in (28, 29):          # CW and CCW compliance slope
-                    result, error = self.packet.write1ByteTxRx(self.port, motor, register,
-                                                               COMPLIANCE_SLOPE[motor])
-                    self.check(result, error)
                 result, error = self.packet.write1ByteTxRx(self.port, motor, 24, 1)
                 self.check(result, error)
         except BaseException:
