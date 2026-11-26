@@ -1,79 +1,92 @@
-"""Move the camera above the keyboard (looking down) and show a live preview
-with the recognised keys drawn on it (red dot = where the robot would press).
+"""Move the camera to the photo pose of the main program and show a live preview
+with the letters the OCR read reliably (red dots). The status line runs the same
+keyboard fit as type_hello.py: not every letter has to be read, the rest of the
+keys (also ones outside the image) are computed from the fitted keyboard grid.
 
-Press  s  to save the view with the keys drawn on it,  q  to quit (the arm then goes back home).
+Uses the same pose (robot/setup.json "home") and resolution (640 x 480) as type_hello.py,
+so what you see here is what the main program sees.
+Press  s  to save the view,  q  to quit (the arm stays in the photo pose).
 If you see the wrong camera (e.g. the MacBook's own), change CAMERA_INDEX to 1 or 2.
 """
-import os, sys, math, time
+import json
+import os
+import sys
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # find robot/
 
 import cv2
+import numpy as np
 from robot.arm import Arm
-from robot.kinematics import ik, fk
-from robot.vision import recognize_keys, draw
+from robot.keyboard import locate
+from robot.vision import recognize_keys, require_tesseract
 
 CAMERA_INDEX = 0
-RECOGNITION_INTERVAL = 0.35
+RECOGNITION_INTERVAL = 0.6          # s between recognitions; the video itself stays live
 
-# Where the camera should be [mm]: x forward, y left, z above the top of the platform
-CAM_X, CAM_Y, CAM_Z = 140, 0, 150
+setup_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "robot", "setup.json")
+with open(setup_path) as f:
+    setup = json.load(f)
+photo_pose = np.array(setup["home"])
 
-# With the stylus pointing down, the camera is 45 mm further out than the tip
-# and 15 mm above it (frame {5} from Problem 1).
-rho = math.hypot(CAM_X, CAM_Y)
-scale = (rho - 45) / rho
-q = ik(CAM_X * scale, CAM_Y * scale, CAM_Z - 15, w=-1)
-print("Camera pose, joint angles:", q.round(1))
-
-arm = Arm(speed=0.1)
+require_tesseract()
+arm = Arm()
 cap = None
 try:
-    arm.move_j(q)
-    print("Camera at", fk(q)[1][:3, 3].round(1), "mm, looking down")
+    print("Photo pose, joint angles:", photo_pose.round(1))
+    arm.move_j(photo_pose)
+    joints = arm.angles()           # actual encoder angles, used for the pixel -> mm conversion
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
         raise SystemExit(f"Could not open camera {CAMERA_INDEX}. Try another index, "
                          "or allow camera access for Terminal / VS Code in System Settings.")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    print("Press s to save the recognised view, q to quit.")
-    last_recognition = 0.0
-    keys, info = None, None
-    status = "Recognising keyboard..."
+    print("Press s to save the view, q to quit.")
+    last, keys, status, good, size = 0.0, {}, "Recognising keyboard...", False, ""
     while True:
         ok, frame = cap.read()
         if not ok:
             print("No frame from the camera.")
             break
 
-        # Recognition runs a few times per second; the video itself stays live
         now = time.time()
-        if now - last_recognition >= RECOGNITION_INTERVAL:
+        if now - last >= RECOGNITION_INTERVAL:
+            h, w = frame.shape[:2]
+            size = "" if (w, h) == (640, 480) else f" | camera gives {w}x{h}, main program needs 640x480!"
             try:
-                keys, info = recognize_keys(frame)
-                missing = [("SPACE" if c == " " else c) for c in "HELOWRD " if c not in keys]
-                status = f"{info['layout']} | {info['inliers']} keys fitted | "
-                status += f"missing: {' '.join(missing)}" if missing else "all hello-world keys found"
-            except (RuntimeError, cv2.error):
-                keys, info = None, None
-                status = "No keyboard found"
-            last_recognition = now
+                keys = recognize_keys(frame)
+            except RuntimeError:
+                keys = {}
+            try:
+                # Same fit as the main program: every key position in mm from the robot base
+                xy, fitted, rms = locate(frame, joints, setup)
+                status = (f"{len(keys)} letters read | keyboard located: {fitted} fitted, "
+                          f"residual {rms:.1f} mm | H at ({xy['H'][0]:.0f}, {xy['H'][1]:.0f}) mm")
+                good = True
+            except (ValueError, RuntimeError) as error:
+                status, good = f"{len(keys)} letters read | NOT located: {error}", False
+            status += size
+            last = now
 
-        annotated = draw(frame, keys, info) if keys else frame.copy()
-        color = (0, 200, 0) if "all hello" in status else (0, 0, 255)
-        cv2.putText(annotated, status, (12, 28), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65, color, 2, cv2.LINE_AA)
-        cv2.imshow("keyboard recognition (s = save, q = quit)", annotated)
+        view = frame.copy()
+        for ch, (x, y) in keys.items():
+            cv2.circle(view, (int(x), int(y)), 4, (0, 0, 255), -1)
+            cv2.putText(view, ch, (int(x) + 6, int(y) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        color = (0, 200, 0) if good and not size else (0, 0, 255)
+        cv2.putText(view, status, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+        cv2.imshow("keyboard recognition (s = save, q = quit)", view)
+
         key = cv2.waitKey(1) & 0xFF
         if key == ord("s"):
-            name = f"keyboard_{time.strftime('%H%M%S')}_keys.png"
-            cv2.imwrite(name, annotated)
-            print("Saved", name, f"({annotated.shape[1]}x{annotated.shape[0]})")
+            name = f"keyboard_{time.strftime('%H%M%S')}.png"
+            cv2.imwrite(name, frame)
+            print("Saved", name)
         elif key == ord("q"):
             break
 finally:
     if cap is not None:
         cap.release()
     cv2.destroyAllWindows()
-    arm.move_j([0, 0, 0, 0])
     arm.close()

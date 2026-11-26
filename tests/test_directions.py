@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from robot.arm import Arm
 
 TEST_DEG = 20
-arm = Arm(speed=0.1)
+arm = Arm()
 try:
     arm.move_j([0, 0, 0, 0])
     for k in range(4):
@@ -24,6 +24,6 @@ try:
         print("  now at:", [round(a, 1) for a in arm.read()])
         input("  Note the direction, then press Enter to go back to 0...")
         arm.move_j([0, 0, 0, 0])
-    print("\nDone. If a joint went the wrong way, set its SIGN to -1 in arm.py.")
+    print("\nDone. If a joint went the wrong way, tell me which one.")
 finally:
     arm.close()

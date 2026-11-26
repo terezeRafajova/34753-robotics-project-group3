@@ -17,7 +17,7 @@ TARGETS = [
     (140, -50,  60, -1),       # 5 cm to the right
 ]
 
-arm = Arm(speed=0.1)
+arm = Arm()
 try:
     for x, y, z, w in TARGETS:
         q = ik(x, y, z, w)
